@@ -7,6 +7,7 @@ local http = require "resty.http"
 local sha256 = require "resty.sha256"
 local to_hex = require("resty.string").to_hex
 local cjson = require "cjson.safe"
+local pkey = require "resty.openssl.pkey"
 local Routes = require "kong.plugins.presence.routes"
 local Util = require "kong.plugins.presence.util"
 
@@ -95,6 +96,74 @@ local function verify_token(conf, token)
 end
 
 -- ---------------------------------------------------------------------------
+-- Fast path (docs/41) — verify a short-lived signed proof LOCALLY and forward
+-- with no /v1/verify round-trip. The proof only speeds a pass: any defect falls
+-- through to the token gate, which fails closed on its own.
+-- ---------------------------------------------------------------------------
+
+-- kong.cache L3 callback: GET the enforcement-proof JWKS (cached, so only the
+-- first proof per rotation pays a fetch; the fast path never calls /v1/verify).
+local function fetch_jwks(conf)
+  local httpc = http.new()
+  httpc:set_timeout(conf.verify_timeout_ms)
+  local res, err = httpc:request_uri(conf.api_host .. Util.PROOF_JWKS_PATH, { method = "GET" })
+  if not res then
+    return nil, "jwks_unreachable:" .. tostring(err)
+  end
+  if res.status ~= 200 then
+    return nil, "jwks_http_" .. res.status
+  end
+  local jwks = cjson.decode(res.body)
+  if type(jwks) ~= "table" or type(jwks.keys) ~= "table" then
+    return nil, "jwks_malformed"
+  end
+  return jwks, nil, 300
+end
+
+-- True when `proof` is a valid, unexpired ES256 PASS proof for this tenant.
+local function proof_passes(conf, proof)
+  local parts = Util.split_jwt(proof)
+  if not parts then
+    return false
+  end
+  local header = cjson.decode(Util.b64url_decode(parts.header_b64) or "")
+  local claims = cjson.decode(Util.b64url_decode(parts.payload_b64) or "")
+  if type(header) ~= "table" or header.alg ~= "ES256" then
+    return false
+  end
+  if not Util.proof_claims_ok(claims, conf.tenant_id, ngx.time()) then
+    return false
+  end
+
+  local jwks = kong.cache:get("presence:proof:jwks", nil, fetch_jwks, conf)
+  if type(jwks) ~= "table" then
+    return false
+  end
+  local jwk
+  for _, candidate in ipairs(jwks.keys or {}) do
+    if candidate.kid == header.kid then
+      jwk = candidate
+      break
+    end
+  end
+  jwk = jwk or (jwks.keys or {})[1]
+  if not jwk then
+    return false
+  end
+
+  -- Import the public JWK. The key kind is inferred from the JWK (a public key
+  -- has no `d`); passing an explicit `type` is rejected by lua-resty-openssl's
+  -- JWK loader ("explicitly load ... from JWK format is not supported").
+  local key = pkey.new(cjson.encode(jwk), { format = "JWK" })
+  local sig = Util.b64url_decode(parts.sig_b64)
+  if not key or not sig then
+    return false
+  end
+  -- lua-resty-openssl converts the raw JOSE r‖s to DER (ecdsa_use_raw).
+  return key:verify(sig, parts.signing_input, "sha256", nil, { ecdsa_use_raw = true }) == true
+end
+
+-- ---------------------------------------------------------------------------
 -- Flow C — same-origin Session Token mint (the tenant credential lives here,
 -- never in the browser). The client controls only an optional intent label.
 -- ---------------------------------------------------------------------------
@@ -154,7 +223,24 @@ end
 -- Flow B — edge verification of protected writes
 -- ---------------------------------------------------------------------------
 
+-- Strip any client-supplied Presence headers, then set edge-computed ones: the
+-- origin sees only values this filter produced.
+local function forward_verified(score, disposition)
+  kong.service.request.clear_header("X-Presence-Status")
+  kong.service.request.clear_header("X-Presence-Risk-Score")
+  kong.service.request.clear_header("X-Presence-Disposition")
+  kong.service.request.set_header("X-Presence-Status", "VERIFIED")
+  kong.service.request.set_header("X-Presence-Risk-Score", score)
+  kong.service.request.set_header("X-Presence-Disposition", disposition)
+end
+
 local function enforce(conf)
+  -- Fast path: a valid PASS proof forwards with no /v1/verify round-trip.
+  local proof = kong.request.get_header(Util.PROOF_HEADER)
+  if proof and proof ~= "" and proof_passes(conf, proof) then
+    return forward_verified("0", "verified")
+  end
+
   local token = kong.request.get_header("X-Presence-Token")
   if not token or token == "" then
     return kong.response.exit(403, {
@@ -179,14 +265,7 @@ local function enforce(conf)
     })
   end
 
-  -- Strip any client-supplied Presence headers, then set edge-computed ones:
-  -- the origin sees only values this filter produced.
-  kong.service.request.clear_header("X-Presence-Status")
-  kong.service.request.clear_header("X-Presence-Risk-Score")
-  kong.service.request.clear_header("X-Presence-Disposition")
-  kong.service.request.set_header("X-Presence-Status", "VERIFIED")
-  kong.service.request.set_header("X-Presence-Risk-Score", string.format("%.4g", verdict.score))
-  kong.service.request.set_header("X-Presence-Disposition",
+  forward_verified(string.format("%.4g", verdict.score),
     Util.disposition_of(verdict.score, verdict.disposition))
 end
 

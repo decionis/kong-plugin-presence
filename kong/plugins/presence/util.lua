@@ -40,4 +40,78 @@ function Util.disposition_of(score, api_disposition)
   return score > Util.CHALLENGE_FLOOR and "challenge" or "verified"
 end
 
+-- ---------------------------------------------------------------------------
+-- Enforcement proof (docs/41) — pure parsing/claim checks. The ES256 signature
+-- verification needs OpenSSL and lives in the handler; everything here is pure
+-- string work, so it runs under plain Lua (busted) as well as OpenResty.
+-- ---------------------------------------------------------------------------
+
+Util.PROOF_HEADER = "X-Presence-Proof"
+Util.PROOF_JWKS_PATH = "/.well-known/presence-proof-jwks.json"
+
+local B64URL = {}
+do
+  local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+  for i = 1, #alphabet do
+    B64URL[alphabet:byte(i)] = i - 1
+  end
+end
+
+-- Decode a base64url string to raw bytes (no bit ops, so LuaJIT-safe). Trailing
+-- '=' padding is tolerated; any other stray byte rejects the input.
+function Util.b64url_decode(input)
+  if type(input) ~= "string" then
+    return nil
+  end
+  local bytes = {}
+  local acc, bits = 0, 0
+  for i = 1, #input do
+    local value = B64URL[input:byte(i)]
+    if value == nil then
+      if input:byte(i) ~= 61 then -- '='
+        return nil
+      end
+    else
+      acc = acc * 64 + value
+      bits = bits + 6
+      if bits >= 8 then
+        bits = bits - 8
+        local shift = 1
+        for _ = 1, bits do
+          shift = shift * 2
+        end
+        bytes[#bytes + 1] = string.char(math.floor(acc / shift) % 256)
+        acc = acc % shift
+      end
+    end
+  end
+  return table.concat(bytes)
+end
+
+-- Split a compact JWS into its three segments plus the signing input, or nil.
+function Util.split_jwt(jwt)
+  if type(jwt) ~= "string" then
+    return nil
+  end
+  local header, payload, signature = jwt:match("^([^.]+)%.([^.]+)%.([^.]+)$")
+  if not header then
+    return nil
+  end
+  return {
+    header_b64 = header,
+    payload_b64 = payload,
+    sig_b64 = signature,
+    signing_input = header .. "." .. payload,
+  }
+end
+
+-- The pure claim gate: only a PASS proof for this tenant, not yet expired.
+function Util.proof_claims_ok(claims, tenant_id, now)
+  return type(claims) == "table"
+    and claims.disp == "PASS"
+    and claims.aud == tenant_id
+    and type(claims.exp) == "number"
+    and claims.exp > now
+end
+
 return Util
