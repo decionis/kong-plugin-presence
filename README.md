@@ -29,7 +29,7 @@ challenge) match the API's `SignalRiskModel` (docs/06 §9).
 
 | Field               | Type    | Notes                                                                                  |
 | ------------------- | ------- | -------------------------------------------------------------------------------------- |
-| `api_host`          | string  | Presence API base (default `https://api.presence.decionis.com`)                        |
+| `api_host`          | string  | Presence API base (default `https://presence.decionis.com`)                            |
 | `api_secret`        | string  | Tenant bearer secret; `referenceable` (use a `{vault://…}` reference)                  |
 | `tenant_id`         | string  | Presence tenant id                                                                     |
 | `protected_routes`  | string  | Comma-separated exact paths + trailing-wildcard prefixes (`/login,/api/v1/checkout/*`) |
@@ -43,7 +43,7 @@ plugins:
   - name: presence
     route: checkout-route
     config:
-      api_host: https://api.presence.decionis.com
+      api_host: https://presence.decionis.com
       api_secret: "{vault://env/presence-api-secret}"
       tenant_id: tn_prod_998124
       protected_routes: /api/v1/checkout/*

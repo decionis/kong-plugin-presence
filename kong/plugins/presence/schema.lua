@@ -16,7 +16,7 @@ return {
             api_host = {
               type = "string",
               required = true,
-              default = "https://api.presence.decionis.com",
+              default = "https://presence.decionis.com",
             },
           },
           -- Tenant bearer secret. `referenceable` so it can be a Vault reference

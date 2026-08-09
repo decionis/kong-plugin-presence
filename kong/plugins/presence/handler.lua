@@ -14,7 +14,7 @@ local Util = require "kong.plugins.presence.util"
 local PresenceHandler = {
   -- After auth/rate-limiting, before the request leaves for the upstream.
   PRIORITY = 1000,
-  VERSION = "1.0.0",
+  VERSION = "1.0.1",
 }
 
 local SESSION_PATH = "/__presence/session"
