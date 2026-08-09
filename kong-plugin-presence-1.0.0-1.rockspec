@@ -2,8 +2,8 @@ package = "kong-plugin-presence"
 version = "1.0.0-1"
 
 source = {
-  url = "git+https://github.com/decionis/Presence.git",
-  dir = "Presence/apps/kong-filter",
+  url = "git+https://github.com/decionis/kong-plugin-presence.git",
+  tag = "v1.0.0",
 }
 
 description = {
