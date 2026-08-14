@@ -1,7 +1,7 @@
 -- Pure path matching against a PROTECTED_ROUTES-style list: comma-separated
 -- exact paths ("/login") and trailing-wildcard prefixes ("/api/v1/checkout/*").
 -- No Kong dependency, so it unit-tests standalone with plain busted. This is
--- the Lua port of the Cloudflare edge filter's RouteMatcher (docs/28).
+-- the Lua port of the Cloudflare edge filter's RouteMatcher.
 local Routes = {}
 
 -- Parse a pattern list into { exact = <set>, prefixes = <list> }.
