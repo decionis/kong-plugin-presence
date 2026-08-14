@@ -2,7 +2,7 @@
 -- the language-neutral Presence enforcement contract. It extracts request
 -- context, delegates every decision to the Presence Edge / Decision API, and
 -- enforces the returned disposition. The rich logic lives remotely; Kong is one
--- adapter beside the Cloudflare Worker (docs/28, docs/33).
+-- adapter beside the Cloudflare Worker.
 local http = require "resty.http"
 local sha256 = require "resty.sha256"
 local to_hex = require("resty.string").to_hex
@@ -96,7 +96,7 @@ local function verify_token(conf, token)
 end
 
 -- ---------------------------------------------------------------------------
--- Fast path (docs/41) — verify a short-lived signed proof LOCALLY and forward
+-- Fast path — verify a short-lived signed proof LOCALLY and forward
 -- with no /v1/verify round-trip. The proof only speeds a pass: any defect falls
 -- through to the token gate, which fails closed on its own.
 -- ---------------------------------------------------------------------------
