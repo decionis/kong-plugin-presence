@@ -35,7 +35,7 @@ plugins:
     config:
       api_host: https://presence.decionis.com
       api_secret: "{vault://env/presence-api-secret}"
-      tenant_id: tn_prod_998124
+      tenant_id: tn_your_tenant_id # from presence.decionis.com → Developers
       protected_routes: /api/v1/checkout/*
 ```
 
@@ -43,13 +43,27 @@ plugins:
 
 | Flow                             | Trigger                                             | Behavior                                                                                                                                                                                                                                                                                         |
 | -------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **B — verify gate**              | `POST`/`PUT`/`DELETE` on a `protected_routes` match | Requires `X-Presence-Token`; verifies it (cache-first, then `POST /v1/verify`) and forwards to the upstream with `X-Presence-Status: VERIFIED` + `X-Presence-Risk-Score` + `X-Presence-Disposition`. Missing/invalid/high-risk → `403`. API unavailable or slow → **fail closed** `503`.         |
+| **B — verify gate**              | `POST`/`PUT`/`DELETE` on a `protected_routes` match | Accepts either an `X-Presence-Proof` (see the proof fast path below) or an `X-Presence-Token`; verifies the token cache-first, then `POST /v1/verify`, and forwards to the upstream with `X-Presence-Status: VERIFIED` + `X-Presence-Risk-Score` + `X-Presence-Disposition`. Missing/invalid/high-risk → `403`. API unavailable or slow → **fail closed** `503`. |
 | **C — session mint**             | `POST /__presence/session`                          | Proxies session creation to `POST /v1/sessions` with the tenant credential (which never reaches the browser), building the action context at the gateway — opaque digest actor id, `web_widget` surface, the gateway host as target. Returns only `session_token` / `session_id` / `expires_in`. |
 | **A — widget inject** (optional) | `GET` HTML responses, when `inject_runtime = true`  | Injects the Presence runtime `<script>` into `<head>` and `<presence-widget>` into every `<form>`. Off by default — an API gateway usually fronts JSON endpoints with no HTML to inject.                                                                                                         |
+
+### Proof fast path
+
+Flow B checks one thing before the token gate: an `X-Presence-Proof` header carrying a
+short-lived ES256 enforcement proof. A proof that passes every check — well-formed JWT, `ES256`,
+valid claims for this `tenant_id`, unexpired, and a signature verified against the enforcement
+JWKS at `/.well-known/presence-proof-jwks.json` on `api_host` — forwards upstream as `VERIFIED`
+with no `/v1/verify` round-trip and no token required.
+
+The proof can only **speed up a pass**, never create one: every failure — malformed header, wrong
+algorithm, bad claims, unreachable or unparseable JWKS, signature mismatch — falls through to the
+token gate, which fails closed on its own. Omit the header and behaviour is exactly the documented
+token flow.
 
 ## Fail-closed guarantees
 
 - Verdict verification is **cache-first** via `kong.cache` (cluster-aware): a hit resolves without an API call; a miss calls `POST /v1/verify` under `verify_timeout_ms`.
+- The proof fast path is fail-closed in the same sense: a proof that cannot be fully verified is discarded and the request still has to satisfy the token gate.
 - Any verification failure or timeout caches nothing and the gate fails closed (`503`); missing, invalid, or high-risk tokens are rejected (`403`).
 - Cache keys are the SHA-256 digest of the token — raw tokens never become cache keys; negative verdicts are cached too.
 - Risk thresholds (`0.75` block / `0.5` challenge) match the Presence API's risk model, so the gateway and the API band identically.
@@ -63,7 +77,7 @@ plugins:
 | `api_secret`        | string  | Tenant bearer secret; `referenceable` (use a `{vault://…}` reference)                  |
 | `tenant_id`         | string  | Presence tenant id                                                                     |
 | `protected_routes`  | string  | Comma-separated exact paths + trailing-wildcard prefixes (`/login,/api/v1/checkout/*`) |
-| `runtime_src`       | string  | Widget runtime URL for Flow A (default Decionis CDN)                                   |
+| `runtime_src`       | string  | Widget runtime URL for Flow A. Default: `https://cdn.jsdelivr.net/npm/@decionis/presence-widget@0.2.0/dist/presence.js` — pinned, so the injected bundle is immutable. Self-host it and override this under a strict CSP. |
 | `verify_timeout_ms` | integer | Hard `/v1/verify` timeout before failing closed (default `500`)                        |
 | `inject_runtime`    | boolean | Enable Flow A HTML injection (default `false`)                                         |
 
