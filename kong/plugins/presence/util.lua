@@ -2,7 +2,7 @@
 -- resty.* requires, so this unit-tests standalone with plain busted.
 local Util = {}
 
--- Flow B bands — must equal the API's SignalRiskModel (docs/06 §9).
+-- Flow B bands — must equal the API's SignalRiskModel.
 Util.RISK_THRESHOLD = 0.75
 Util.CHALLENGE_FLOOR = 0.5
 
@@ -41,7 +41,7 @@ function Util.disposition_of(score, api_disposition)
 end
 
 -- ---------------------------------------------------------------------------
--- Enforcement proof (docs/41) — pure parsing/claim checks. The ES256 signature
+-- Enforcement proof — pure parsing/claim checks. The ES256 signature
 -- verification needs OpenSSL and lives in the handler; everything here is pure
 -- string work, so it runs under plain Lua (busted) as well as OpenResty.
 -- ---------------------------------------------------------------------------
